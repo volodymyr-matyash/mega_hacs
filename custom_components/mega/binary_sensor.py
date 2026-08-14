@@ -14,6 +14,7 @@ from homeassistant.const import (
     CONF_UNIQUE_ID,
     CONF_ID,
     CONF_ENTITY_ID,
+    STATE_ON,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.template import Template
@@ -89,7 +90,7 @@ class MegaBinarySensor(BinarySensorEntity, MegaPushEntity):
         if isinstance(val, dict):
             val = val.get("value", val.get('m'))
         if val is None and self._state is not None:
-            return self._state == 'ON'
+            return self._state.state == STATE_ON
         elif val is not None:
             if val in ['ON', 'OFF', '1', '0']:
                 return val in ['ON', '1'] if not self.invert else val in ['OFF', '0']
@@ -98,4 +99,3 @@ class MegaBinarySensor(BinarySensorEntity, MegaPushEntity):
 
     def _update(self, payload: dict):
         self.mega.values[self.port] = payload
-

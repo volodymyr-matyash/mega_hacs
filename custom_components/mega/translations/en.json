@@ -1,58 +1,58 @@
 {
-    "config": {
-        "abort": {
-            "already_configured": "Device is already configured"
-        },
-        "error": {
-            "cannot_connect": "Failed to connect",
-            "invalid_auth": "Invalid authentication",
-            "unknown": "Unexpected error",
-            "duplicate_id": "Duplicate ID",
-            "mqtt_inputs": "Use MQTT"
-        },
-        "step": {
-            "user": {
-                "data": {
-                    "host": "Host",
-                    "password": "Password",
-                    "username": "Username",
-                    "id": "ID",
-                    "mqtt_id": "MQTT id",
-                    "scan_interval": "Scan interval (sec), 0 - don't update",
-                    "port_to_scan": "Port to poll aliveness (needed only if no sensors used)",
-                    "nports": "Number of ports",
-                    "update_all": "Update all outs when input",
-                    "mqtt_inputs": "Use MQTT (Deprecated)",
-                    "fake_response": "Fake response",
-                    "force_d": "Force 'd' response",
-                    "protected": "Protected",
-                    "allow_hosts": "Allowed hosts",
-                    "restore_on_restart": "Restore outs on restart",
-                    "poll_outs": "Poll outs",
-                    "update_time": "Sync time"
-                }
-            }
+  "title": "MegaD",
+  "config": {
+    "step": {
+      "user": {
+        "data": {
+          "id": "MegaD ID",
+          "host": "Host",
+          "password": "Password",
+          "scan_interval": "Scan interval (seconds; 0 disables polling)",
+          "poll_outs": "Poll outputs",
+          "nports": "Number of ports",
+          "update_all": "Update all outputs after an input event",
+          "fake_response": "Send commands using a separate request",
+          "force_d": "Force a 'd' response",
+          "restore_on_restart": "Restore outputs after a controller restart",
+          "protected": "Reject callback requests from unknown hosts",
+          "allow_hosts": "Additional allowed IP addresses (separated by ;)",
+          "update_time": "Synchronize controller time"
         }
+      },
+      "reauth_confirm": {
+        "description": "Enter the password for {host}.",
+        "data": {"password": "Password"}
+      }
     },
-    "options": {
-        "step": {
-            "init": {
-                "data": {
-                  "scan_interval": "Scan interval (sec), 0 - don't update",
-                  "port_to_scan": "Port to poll aliveness (needed only if no sensors used)",
-                  "reload": "Reload objects",
-                  "mqtt_inputs": "Use MQTT (Deprecated)",
-                  "update_all": "Update all outs when input",
-                  "fake_response": "Fake response",
-                  "force_d": "Force 'd' response",
-                  "protected": "Protected",
-                  "allow_hosts": "Allowed hosts",
-                  "restore_on_restart": "Restore outs on restart",
-                  "poll_outs": "Poll outs",
-                  "update_time": "Sync time"
-                }
-            }
+    "error": {
+      "cannot_connect": "Failed to connect",
+      "invalid_auth": "Invalid password",
+      "unknown": "Unexpected error",
+      "duplicate_id": "Another MegaD entry uses this ID"
+    },
+    "abort": {
+      "already_configured": "Device is already configured",
+      "reauth_successful": "Authentication was updated successfully"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "scan_interval": "Scan interval (seconds; 0 disables polling)",
+          "poll_outs": "Poll outputs",
+          "nports": "Number of ports",
+          "reload": "Rescan ports and entities",
+          "update_all": "Update all outputs after an input event",
+          "fake_response": "Send commands using a separate request",
+          "force_d": "Force a 'd' response",
+          "restore_on_restart": "Restore outputs after a controller restart",
+          "protected": "Reject callback requests from unknown hosts",
+          "allow_hosts": "Additional allowed IP addresses (separated by ;)",
+          "update_time": "Synchronize controller time"
         }
+      }
     },
-    "title": "mega"
+    "error": {"cannot_connect": "Failed to connect"}
+  }
 }

@@ -1,10 +1,7 @@
 # MegaD HomeAssistant integration
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/custom-components/hacs)
 [![Donate](https://img.shields.io/badge/donate-Yandex-red.svg)](https://yoomoney.ru/to/410013955329136)
-<a class="github-button" href="https://github.com/andvikt/mega_hacs" data-icon="octicon-star" data-show-count="true" aria-label="Star andvikt/mega_hacs on GitHub">Star</a>
-
-[Сообщить о проблеме](https://github.com/andvikt/mega_hacs/issues/new?assignees=&labels=&template=bug-report.md&title=){ .md-button .md-button--primary }
-[Предложение об улучшении](https://github.com/andvikt/mega_hacs/issues/new?assignees=&labels=enhancement&template=enhance.md&title=){ .md-button .md-button--primary }
+<a class="github-button" href="https://github.com/volodymyr-matyash/mega_hacs" data-icon="octicon-star" data-show-count="true" aria-label="Star volodymyr-matyash/mega_hacs on GitHub">Star</a>
 
 Интеграция с [MegaD-2561, MegaD-328](https://www.ab-log.ru/smart-house/ethernet/megad-2561)
 
@@ -48,7 +45,7 @@
     Откройте терминал (стандартный аддон Terminal & SSH, если у вас есть supervisor, если нет то терминал вашей системы)
     ```shell
     # из папки с конфигом
-    wget -q -O - https://raw.githubusercontent.com/andvikt/mega_hacs/master/install.sh | bash -
+    wget -q -O - https://raw.githubusercontent.com/volodymyr-matyash/mega_hacs/master/install.sh | bash -
     ```
     Не забываем перезагрузить HA
 

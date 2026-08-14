@@ -1,19 +1,20 @@
 {
   "domain": "mega",
-  "name": "mega",
-  "config_flow": true,
-  "documentation": "https://github.com/andvikt/mega_hacs",
-  "requirements": [
-    "beautifulsoup4",
-    "lxml"
-  ],
-  "ssdp": [],
-  "zeroconf": [],
-  "homekit": {},
+  "name": "MegaD",
   "after_dependencies": ["mqtt"],
   "codeowners": [
-    "@andvikt"
+    "@volodymyr-matyash"
   ],
-  "issue_tracker": "https://github.com/andvikt/mega_hacs/issues",
-  "version": "v1.1.8b2"
+  "config_flow": true,
+  "documentation": "https://github.com/volodymyr-matyash/mega_hacs",
+  "homekit": {},
+  "integration_type": "hub",
+  "iot_class": "local_push",
+  "requirements": [
+    "beautifulsoup4==4.13.3",
+    "lxml==6.1.1"
+  ],
+  "ssdp": [],
+  "version": "v1.2.0b1",
+  "zeroconf": []
 }

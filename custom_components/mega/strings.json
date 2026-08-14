@@ -1,28 +1,28 @@
 {
-  "title": "mega",
+  "title": "MegaD",
   "config": {
     "step": {
       "user": {
         "data": {
+          "id": "MegaD ID",
           "host": "[%key:common::config_flow::data::host%]",
-          "username": "[%key:common::config_flow::data::username%]",
           "password": "[%key:common::config_flow::data::password%]",
-          "id": "[%key:common::config_flow::data::password%]",
-          "mqtt_id": "[%key:common::config_flow::data::mqtt_id%]",
-          "scan_interval": "[%key:common::config_flow::data::mqtt_id%]",
-          "port_to_scan": "[%key:common::config_flow::data::port_to_scan%]",
-          "invert": "[%key:common::config_flow::data::invert%]",
-          "mqtt_inputs": "[%key:common::config_flow::data::mqtt_inputs%]",
-          "nports": "[%key:common::config_flow::data::nports%]",
-          "update_all": "[%key:common::config_flow::data::update_all%]",
-          "fake_response": "[%key:common::config_flow::data::fake_response%]",
-          "force_d": "[%key:common::config_flow::data::force_d%]",
-          "protected": "[%key:common::config_flow::data::protected%]",
-          "allow_hosts": "[%key:common::config_flow::data::allow_hosts%]",
-          "restore_on_restart": "[%key:common::config_flow::data::restore_on_restart%]",
-          "poll_outs": "[%key:common::config_flow::data::poll_outs%]",
-          "update_time": "[%key:common::config_flow::data::update_time%]"
-
+          "scan_interval": "Scan interval (seconds; 0 disables polling)",
+          "poll_outs": "Poll outputs",
+          "nports": "Number of ports",
+          "update_all": "Update all outputs after an input event",
+          "fake_response": "Send commands using a separate request",
+          "force_d": "Force a 'd' response",
+          "restore_on_restart": "Restore outputs after a controller restart",
+          "protected": "Reject callback requests from unknown hosts",
+          "allow_hosts": "Additional allowed IP addresses (separated by ;)",
+          "update_time": "Synchronize controller time"
+        }
+      },
+      "reauth_confirm": {
+        "description": "Enter the password for {host}.",
+        "data": {
+          "password": "[%key:common::config_flow::data::password%]"
         }
       }
     },
@@ -30,26 +30,33 @@
       "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
       "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
       "unknown": "[%key:common::config_flow::error::unknown%]",
-      "duplicate_id": "[%key:common::config_flow::error::duplicate_id%]"
+      "duplicate_id": "Another MegaD entry uses this ID"
     },
     "abort": {
-      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]"
+      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]",
+      "reauth_successful": "[%key:common::config_flow::abort::reauth_successful%]"
     }
   },
   "options": {
     "step": {
       "init": {
         "data": {
-          "scan_interval": "[%key:common::config_flow::data::scan_interval%]",
-          "port_to_scan": "[%key:common::config_flow::data::port_to_scan%]",
-          "reload": "[%key:common::config_flow::data::reload%]",
-          "invert": "[%key:common::config_flow::data::invert%]",
-          "mqtt_inputs": "[%key:common::config_flow::data::mqtt_inputs%]",
-          "nports": "[%key:common::config_flow::data::nports%]",
-          "update_all": "[%key:common::config_flow::data::update_all%]",
-          "poll_outs": "[%key:common::config_flow::data::poll_outs%]"
+          "scan_interval": "Scan interval (seconds; 0 disables polling)",
+          "poll_outs": "Poll outputs",
+          "nports": "Number of ports",
+          "reload": "Rescan ports and entities",
+          "update_all": "Update all outputs after an input event",
+          "fake_response": "Send commands using a separate request",
+          "force_d": "Force a 'd' response",
+          "restore_on_restart": "Restore outputs after a controller restart",
+          "protected": "Reject callback requests from unknown hosts",
+          "allow_hosts": "Additional allowed IP addresses (separated by ;)",
+          "update_time": "Synchronize controller time"
         }
       }
+    },
+    "error": {
+      "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]"
     }
   }
 }
