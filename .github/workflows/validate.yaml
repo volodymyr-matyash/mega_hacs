@@ -18,4 +18,6 @@ jobs:
         uses: "hacs/action@main"
         with:
           category: "integration"
-          ignore: "issues topics"
+          # The upstream project has no declared license, and a fork cannot
+          # legally assign one on the original author's behalf.
+          ignore: "issues topics license"
