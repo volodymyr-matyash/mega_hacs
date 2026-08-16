@@ -12,7 +12,12 @@ from bs4 import BeautifulSoup
 
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import TEMP_CELSIUS, PERCENTAGE, LIGHT_LUX
+from homeassistant.const import (
+    LIGHT_LUX,
+    UnitOfPressure,
+    UnitOfRatio,
+    UnitOfTemperature,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from .config_parser import parse_config, DS2413, MCP230, MCP230_OUT, MCP230_IN, PCA9685
@@ -31,6 +36,7 @@ from .const import (
     PATT_FW,
     CONF_FORCE_I2C_SCAN,
     REMOVE_CONFIG,
+    CONFIG_OPTION_KEYS,
 )
 from .entities import set_events_off, BaseMegaEntity, MegaOutPort, safe_int
 from .exceptions import CannotConnect, NoPort
@@ -42,7 +48,12 @@ HUM_PATT = re.compile(r"hum:([01234567890\.]+)")
 PRESS_PATT = re.compile(r"press:([01234567890\.]+)")
 LUX_PATT = re.compile(r"lux:([01234567890\.]+)")
 PATTERNS = {TEMP: TEMP_PATT, HUM: HUM_PATT, PRESS: PRESS_PATT, LUX: LUX_PATT}
-UNITS = {TEMP: TEMP_CELSIUS, HUM: PERCENTAGE, PRESS: "mmHg", LUX: LIGHT_LUX}
+UNITS = {
+    TEMP: UnitOfTemperature.CELSIUS,
+    HUM: UnitOfRatio.PERCENTAGE,
+    PRESS: UnitOfPressure.MMHG,
+    LUX: LIGHT_LUX,
+}
 CLASSES = {
     TEMP: SensorDeviceClass.TEMPERATURE,
     HUM: SensorDeviceClass.HUMIDITY,
@@ -92,16 +103,12 @@ class MegaD:
         """Initialize."""
         self.skip_ports = set()
         if config is not None:
-            lg.debug(f"load config: %s", config.data)
+            lg.debug("load config entry %s", config.entry_id)
         self.config = config
         self.http = hass.data.get(DOMAIN, {}).get(CONF_HTTP)
-        if not self.http is None:
-            self.http.allowed_hosts |= {host}
-            self.http.hubs[host] = self
-            if len(self.http.hubs) == 1:
-                self.http.hubs["__def"] = self
-            if mqtt_id:
-                self.http.hubs[mqtt_id] = self
+        self._allow_hosts = allow_hosts
+        self._protected = protected
+        self._http_registered = False
         self.smooth = smooth or []
         self.new_naming = new_naming
         self.extenders = extenders or []
@@ -113,7 +120,7 @@ class MegaD:
         self.update_all = update_all if update_all is not None else True
         self.nports = nports
         self.fake_response = fake_response
-        self.loop: asyncio.AbstractEventLoop = None
+        self.loop = loop
         self.hass = hass
         self.host = host
         self.sec = password
@@ -136,13 +143,13 @@ class MegaD:
         self._callbacks: typing.DefaultDict[
             int, typing.List[typing.Callable[[dict], typing.Coroutine]]
         ] = defaultdict(list)
-        self._loop = loop
         self._customize = None
         self.values = {}
         self.last_port = None
         self.updater = DataUpdateCoordinator(
             hass,
             self.lg,
+            config_entry=config,
             name="megad",
             update_method=self.poll,
             update_interval=timedelta(seconds=self.poll_interval)
@@ -160,23 +167,40 @@ class MegaD:
         self.restore_on_restart = restore_on_restart
         if force_d is not None:
             self.customize[CONF_FORCE_D] = force_d
-        try:
-            if allow_hosts is not None and DOMAIN in hass.data:
-                allow_hosts = set(allow_hosts.split(";"))
-                hass.data[DOMAIN][CONF_HTTP].allowed_hosts |= allow_hosts
-            hass.data[DOMAIN][CONF_HTTP].protected = protected
-        except Exception:
-            self.lg.exception("while setting allowed hosts")
         self.binary_sensors = []
 
     async def start(self):
         pass
 
+    def register_http(self):
+        """Register this live hub in the shared MegaD callback view."""
+        if self.http is None or self._http_registered:
+            return
+
+        self.http.allowed_hosts.add(self.host)
+        if self._allow_hosts:
+            self.http.allowed_hosts.update(self._allow_hosts.split(";"))
+        self.http.protected = self._protected
+        self.http.hubs[self.host] = self
+        if self.mqtt_id:
+            self.http.hubs[self.mqtt_id] = self
+        self.http.hubs.setdefault("__def", self)
+        self._http_registered = True
+
     async def stop(self):
         if self.subs is not None:
             self.subs()
+            self.subs = None
         for x in self._callbacks.values():
             x.clear()
+        if self.http is not None:
+            self.http.callbacks.pop(self.id, None)
+            for key, hub in list(self.http.hubs.items()):
+                if hub is self:
+                    self.http.hubs.pop(key, None)
+            if "__def" not in self.http.hubs and self.http.hubs:
+                self.http.hubs["__def"] = next(iter(self.http.hubs.values()))
+        self._http_registered = False
 
     async def add_entity(self, ent):
         async with self.lck:
@@ -277,7 +301,9 @@ class MegaD:
 
     async def get_mqtt_id(self):
         async with aiohttp.request(
-            "get", f"http://{self.host}/{self.sec}/?cf=2"
+            "get",
+            f"http://{self.host}/{self.sec}/?cf=2",
+            timeout=aiohttp.ClientTimeout(total=5),
         ) as req:
             data = await req.text(encoding="iso-8859-5")
             data = BeautifulSoup(data, features="lxml")
@@ -298,7 +324,7 @@ class MegaD:
         url = f"http://{self.host}/{self.sec}"
         if cmd:
             url = f"{url}/?{cmd}"
-        self.lg.debug("request: %s", url)
+        self.lg.debug("request to %s: %s", self.host, cmd or "<root>")
         async with self._http_lck(priority):
             for _ntry in range(3):
                 try:
@@ -307,10 +333,9 @@ class MegaD:
                     ) as req:
                         if req.status != 200:
                             self.lg.warning(
-                                "%s returned %s (%s)",
-                                url,
+                                "%s returned HTTP %s",
+                                self.host,
                                 req.status,
-                                await req.text(encoding="iso-8859-5"),
                             )
                             return None
                         else:
@@ -318,7 +343,11 @@ class MegaD:
                             self.lg.debug("response %s", ret)
                             return ret
                 except asyncio.TimeoutError:
-                    self.lg.warning(f"timeout while requesting {url}")
+                    self.lg.warning(
+                        "timeout while requesting %s: %s",
+                        self.host,
+                        cmd or "<root>",
+                    )
                     # raise
                     await asyncio.sleep(1)
             raise asyncio.TimeoutError("after 3 tries")
@@ -436,11 +465,18 @@ class MegaD:
             f"subscribe %s",
             port,
         )
+        if self.http is None:
+            self.lg.warning("HTTP callback view is unavailable")
+            return
         self.http.callbacks[self.id][port].append(callback)
 
     async def authenticate(self) -> bool:
         """Test if we can authenticate with the host."""
-        async with aiohttp.request("get", url=f"http://{self.host}/{self.sec}") as req:
+        async with aiohttp.request(
+            "get",
+            url=f"http://{self.host}/{self.sec}",
+            timeout=aiohttp.ClientTimeout(total=5),
+        ) as req:
             if "Unauthorized" in await req.text(encoding="iso-8859-5"):
                 return False
             else:
@@ -450,8 +486,12 @@ class MegaD:
 
     async def get_port_page(self, port):
         url = f"http://{self.host}/{self.sec}/?pt={port}"
-        self.lg.debug(f"get page for port {port} {url}")
-        async with aiohttp.request("get", url) as req:
+        self.lg.debug("get page for %s port %s", self.host, port)
+        async with aiohttp.request(
+            "get",
+            url,
+            timeout=aiohttp.ClientTimeout(total=5),
+        ) as req:
             return await req.text(encoding="iso-8859-5")
 
     async def scan_port(self, port):
@@ -654,16 +694,37 @@ class MegaD:
     async def update_time(self):
         await self.request(cf=7, stime=datetime.now().strftime("%H:%M:%S"))
 
-    async def reload(self, reload_entry=True):
-        new = await self.get_config(nports=self.nports)
-        cfg = dict(self.config.data)
+    async def reload(self, reload_entry=True, base_config=None):
+        nports = (
+            base_config.get("nports", self.nports)
+            if base_config is not None
+            else self.nports
+        )
+        new = await self.get_config(nports=nports)
+        if base_config is not None:
+            cfg = dict(base_config)
+        elif self.config is not None:
+            cfg = dict(self.config.data)
+            cfg.update({
+                key: value
+                for key, value in self.config.options.items()
+                if key in CONFIG_OPTION_KEYS
+            })
+        else:
+            cfg = {}
         for x in REMOVE_CONFIG:
             cfg.pop(x, None)
         cfg.update(new)
-        self.lg.debug(f"new config: %s", cfg)
-        self.config.data = cfg
-        if reload_entry:
-            await self.hass.config_entries.async_reload(self.config.entry_id)
+        self.lg.debug("reloaded config keys: %s", sorted(cfg))
+        if reload_entry and self.config is not None:
+            changed = self.hass.config_entries.async_update_entry(
+                self.config,
+                data=cfg,
+            )
+            if not changed or not self.config.update_listeners:
+                self.hass.config_entries.async_schedule_reload(
+                    self.config.entry_id
+                )
         return cfg
 
     def _wrap_port_smooth(self, from_, to_, time):
@@ -703,6 +764,11 @@ class MegaD:
         :param chip: кол-во чипов для ws-лент
         :return:
         """
+        if all(from_ == to_ for _, from_, to_ in config):
+            if updater is not None:
+                updater(tuple(to_ for _, _, to_ in config))
+            return
+
         if can_smooth_hardware:
             for i, (pt, from_, to_) in enumerate(config):
                 pct = abs(from_ - to_) / max_values[i]

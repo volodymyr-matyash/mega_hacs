@@ -1,8 +1,4 @@
 {
   "name": "MegaD",
-  "country": "RU",
-  "domains": ["mega"],
-  "persistent_directory": "userfiles",
-  "iot_class": ["Assumed State", "Local Push"],
-  "render_readme": true
+  "homeassistant": "2026.8.0"
 }

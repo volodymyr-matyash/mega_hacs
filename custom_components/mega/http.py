@@ -8,7 +8,7 @@ from aiohttp.web_request import Request
 from aiohttp.web_response import Response
 
 from homeassistant.helpers.template import Template
-from homeassistant.components.http import HomeAssistantView
+from homeassistant.components.http import HomeAssistantView, KEY_HASS
 from homeassistant.core import HomeAssistant
 from .const import EVENT_BINARY_SENSOR, DOMAIN, CONF_RESPONSE_TEMPLATE
 from .tools import make_ints
@@ -46,41 +46,43 @@ class MegaView(HomeAssistantView):
 
     async def get(self, request: Request) -> Response:
         _LOGGER.debug('request from %s %s', request.remote, request.headers)
-        hass: HomeAssistant = request.app['hass']
+        hass: HomeAssistant = request.app[KEY_HASS]
+        request_remote = request.remote or ""
         if self.protected:
-            auth = False
-            for x in self.allowed_hosts:
-                if request.remote.startswith(x):
-                    auth = True
-                    break
+            auth = request_remote in self.allowed_hosts
             if not auth:
-                msg = f"Non-authorised request from {request.remote} to `/mega`. "\
+                msg = f"Non-authorised request from {request_remote} to `/mega`. "\
                       f"If you want to accept requests from this host "\
                       f"please add it to allowed hosts in `mega` UI-configuration"
-                if not self.notified_attempts[request.remote]:
+                if not self.notified_attempts[request_remote]:
                     await hass.services.async_call(
                         'persistent_notification',
                         'create',
                         {
-                            "notification_id": request.remote,
+                            "notification_id": request_remote,
                             "title": "Non-authorised request",
                             "message": msg
                         }
                     )
+                    self.notified_attempts[request_remote] = True
                 _LOGGER.warning(msg)
                 return Response(status=401)
 
-        remote = request.headers.get('X-Real-IP', request.remote)
+        remote = request.headers.get('X-Real-IP', request_remote)
         hub: 'h.MegaD' = self.hubs.get(remote)
         if hub is None and 'mdid' in request.query:
             hub = self.hubs.get(request.query['mdid'])
             if hub is None:
                 _LOGGER.warning(f'can not find mdid={request.query["mdid"]} in {list(self.hubs)}')
-        if hub is None and request.remote in ['::1', '127.0.0.1']:
+        if hub is None and request_remote in ['::1', '127.0.0.1']:
             try:
                 hub = list(self.hubs.values())[0]
             except IndexError:
-                _LOGGER.warning(f'can not find mdid={request.query["mdid"]} in {list(self.hubs)}')
+                _LOGGER.warning(
+                    'can not find mdid=%s in %s',
+                    request.query.get("mdid"),
+                    list(self.hubs),
+                )
                 return Response(status=400)
         elif hub is None:
             return Response(status=400)
@@ -89,10 +91,14 @@ class MegaView(HomeAssistantView):
             EVENT_BINARY_SENSOR,
             data,
         )
-        _LOGGER.debug(f"Request: %s from '%s'", data, request.remote)
+        _LOGGER.debug("Request: %s from '%s'", data, request_remote)
         make_ints(data)
         if data.get('st') == '1':
-            hass.async_create_task(self.later_restore(hub))
+            hub.config.async_create_background_task(
+                hass,
+                self.later_restore(hub),
+                "MegaD delayed restore",
+            )
             return Response(status=200)
         port = data.get('pt')
         data = data.copy()
@@ -129,7 +135,10 @@ class MegaView(HomeAssistantView):
                         template: Template = self.templates.get(hub.id, {}).get(port, hub.def_response)
                         if template is not None:
                             template.hass = hass
-                            ret = template.async_render(_data)
+                            ret = template.async_render(
+                                _data,
+                                parse_result=False,
+                            )
                         hub.lg.debug(f'response={ret}, template={template}')
                         if ret == 'd' and act:
                             await hub.request(cmd=act.replace(':3', f':{v}'))
@@ -142,18 +151,24 @@ class MegaView(HomeAssistantView):
                 template: Template = self.templates.get(hub.id, {}).get(port, hub.def_response)
                 if template is not None:
                     template.hass = hass
-                    ret = template.async_render(data)
+                    ret = template.async_render(data, parse_result=False)
             if hub.update_all and update_all:
-                asyncio.create_task(self.later_update(hub))
+                hub.config.async_create_background_task(
+                    hass,
+                    self.later_update(hub),
+                    "MegaD delayed update",
+                )
         _LOGGER.debug('response %s', ret)
-        Response(body='' if hub.fake_response else ret, content_type='text/plain')
 
         if hub.fake_response and 'value' not in data and 'pt' in data and port in hub.binary_sensors:
             if 'd' in ret:
                 await hub.request(pt=port, cmd=ret)
             else:
                 await hub.request(cmd=ret)
-        return ret
+        return Response(
+            text="" if hub.fake_response or ret is None else str(ret),
+            content_type='text/plain',
+        )
 
     async def later_restore(self, hub):
         """

@@ -1,9 +1,9 @@
 """The mega integration."""
 import asyncio
 import logging
-import typing
 from functools import partial
 
+import aiohttp
 import voluptuous as vol
 
 from homeassistant.const import (
@@ -11,7 +11,7 @@ from homeassistant.const import (
     CONF_UNIT_OF_MEASUREMENT, CONF_VALUE_TEMPLATE, CONF_DEVICE_CLASS, CONF_PORT
 )
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.helpers.service import bind_hass
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.config_entries import ConfigEntry
 from .const import DOMAIN, CONF_INVERT, CONF_RELOAD, PLATFORMS, CONF_PORTS, CONF_CUSTOM, CONF_SKIP, CONF_PORT_TO_SCAN, \
@@ -19,9 +19,10 @@ from .const import DOMAIN, CONF_INVERT, CONF_RELOAD, PLATFORMS, CONF_PORTS, CONF
     CONF_CONV_TEMPLATE, CONF_ALL, CONF_FORCE_D, CONF_DEF_RESPONSE, CONF_FORCE_I2C_SCAN, CONF_HEX_TO_FLOAT, \
     RGB_COMBINATIONS, CONF_WS28XX, CONF_ORDER, CONF_SMOOTH, CONF_LED, CONF_WHITE_SEP, CONF_CHIP, CONF_RANGE, \
     CONF_FILTER_VALUES, CONF_FILTER_SCALE, CONF_FILTER_LOW, CONF_FILTER_HIGH, CONF_FILL_NA, CONF_MEGA_ID, CONF_ADDR, \
-    CONF_1WBUS
+    CONF_1WBUS, CONFIG_OPTION_KEYS
 from .hub import MegaD
 from .config_flow import ConfigFlow
+from .exceptions import CannotConnect
 from .http import MegaView
 
 _LOGGER = logging.getLogger(__name__)
@@ -149,11 +150,6 @@ CONFIG_SCHEMA = vol.Schema(
 
 ALIVE_STATE = 'alive'
 DEF_ID = 'def'
-_POLL_TASKS = {}
-_hubs = {}
-_subs = {}
-
-
 async def async_setup(hass: HomeAssistant, config: dict):
     """YAML-конфигурация содержит только кастомизации портов"""
     hass.data[DOMAIN] = {CONF_CUSTOM: config.get(DOMAIN, {})}
@@ -186,38 +182,74 @@ async def async_setup(hass: HomeAssistant, config: dict):
 async def get_hub(hass, entry):
     id = entry.data.get('id', entry.entry_id)
     data = dict(entry.data)
-    data.update(entry.options or {})
+    data.update({
+        key: value
+        for key, value in entry.options.items()
+        if key in CONFIG_OPTION_KEYS
+    })
     data.update(id=id)
-    hub = MegaD(hass, config=entry, **data, lg=_LOGGER, loop=asyncio.get_event_loop())
-    hub.mqtt_id = await hub.get_mqtt_id()
+    hub = MegaD(
+        hass,
+        config=entry,
+        **data,
+        lg=_LOGGER,
+        loop=asyncio.get_running_loop(),
+    )
     return hub
 
 
 async def _add_mega(hass: HomeAssistant, entry: ConfigEntry):
-    id = entry.data.get('id', entry.entry_id)
     hub = await get_hub(hass, entry)
-    hub.fw = await hub.get_fw()
-    hass.data[DOMAIN][id] = hub
-    hass.data[DOMAIN][CONF_ALL][id] = hub
-    if not await hub.authenticate():
-        raise Exception("not authentificated")
-    mid = await hub.get_mqtt_id()
-    hub.mqtt_id = mid
+    try:
+        if not await hub.authenticate():
+            raise ConfigEntryAuthFailed("Invalid MegaD password")
+        hub.mqtt_id = await hub.get_mqtt_id()
+        hub.fw = await hub.get_fw()
+    except ConfigEntryAuthFailed:
+        raise
+    except (aiohttp.ClientError, asyncio.TimeoutError, CannotConnect) as err:
+        _LOGGER.warning(
+            "Unable to connect to MegaD at %s (%s)",
+            hub.host,
+            type(err).__name__,
+        )
+        raise ConfigEntryNotReady("Unable to connect to MegaD") from None
     return hub
 
 
+async def _cleanup_runtime_hub(hass: HomeAssistant, id, hub: MegaD) -> None:
+    """Stop a hub and remove every runtime reference to it."""
+    try:
+        await hub.stop()
+    finally:
+        hass.data[DOMAIN].pop(id, None)
+        hass.data[DOMAIN][CONF_ALL].pop(id, None)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
+    id = entry.data.get('id', entry.entry_id)
     hub: MegaD = await _add_mega(hass, entry)
-    _hubs[entry.entry_id] = hub
-    _subs[entry.entry_id] = entry.add_update_listener(updater)
-    await hub.start()
-    for platform in PLATFORMS:
-        hass.async_create_task(
-            hass.config_entries.async_forward_entry_setup(
-                entry, platform
-            )
-        )
-    await hub.updater.async_refresh()
+    hass.data[DOMAIN][id] = hub
+    hass.data[DOMAIN][CONF_ALL][id] = hub
+    platform_setup_started = False
+    try:
+        await hub.start()
+        platform_setup_started = True
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+        await hub.updater.async_refresh()
+        hub.register_http()
+    except (Exception, asyncio.CancelledError):
+        if platform_setup_started:
+            try:
+                await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+            except (Exception, asyncio.CancelledError) as unload_err:
+                _LOGGER.warning(
+                    "Unable to unload partially set up MegaD platforms (%s)",
+                    type(unload_err).__name__,
+                )
+        await _cleanup_runtime_hub(hass, id, hub)
+        raise
+    entry.async_on_unload(entry.add_update_listener(updater))
     return True
 
 
@@ -231,31 +263,24 @@ async def updater(hass: HomeAssistant, entry: ConfigEntry):
     # hub: MegaD = hass.data[DOMAIN][entry.data[CONF_ID]]
     # hub.poll_interval = entry.options[CONF_SCAN_INTERVAL]
     # hub.port_to_scan = entry.options.get(CONF_PORT_TO_SCAN, 0)
-    await hass.config_entries.async_reload(entry.entry_id)
-    return True
+    hass.config_entries.async_schedule_reload(entry.entry_id)
 
 
-async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Handle removal of an entry."""
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload a config entry."""
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if not unload_ok:
+        return False
+
     id = entry.data.get('id', entry.entry_id)
     hub: MegaD = hass.data[DOMAIN].get(id)
-    if hub is None:
-        return True
-    _LOGGER.debug(f'remove {id}')
-    _hubs.pop(id, None)
-    hass.data[DOMAIN].pop(id, None)
-    hass.data[DOMAIN][CONF_ALL].pop(id, None)
-    for platform in PLATFORMS:
-        await hass.config_entries.async_forward_entry_unload(entry, platform)
-    task: asyncio.Task = _POLL_TASKS.pop(id, None)
-    if task is not None:
-        task.cancel()
-    if hub is None:
-        return True
-    await hub.stop()
+    _LOGGER.debug('unload %s', id)
+    if hub is not None:
+        await _cleanup_runtime_hub(hass, id, hub)
+    else:
+        hass.data[DOMAIN].pop(id, None)
+        hass.data[DOMAIN][CONF_ALL].pop(id, None)
     return True
-
-async_unload_entry = async_remove_entry
 
 
 async def async_migrate_entry(hass, config_entry: ConfigEntry):
@@ -263,13 +288,18 @@ async def async_migrate_entry(hass, config_entry: ConfigEntry):
     _LOGGER.debug("Migrating from version %s to version %s", config_entry.version, ConfigFlow.VERSION)
     hub = await get_hub(hass, config_entry)
     new = dict(config_entry.data)
-    await hub.start()
-    cfg = await hub.get_config()
-    await hub.stop()
+    try:
+        await hub.start()
+        cfg = await hub.get_config()
+    finally:
+        await hub.stop()
     new.update(cfg)
-    _LOGGER.debug(f'new config: %s', new)
-    config_entry.data = new
-    config_entry.version = ConfigFlow.VERSION
+    _LOGGER.debug("migrated config keys: %s", sorted(new))
+    hass.config_entries.async_update_entry(
+        config_entry,
+        data=new,
+        version=ConfigFlow.VERSION,
+    )
 
     _LOGGER.info("Migration to version %s successful", config_entry.version)
 
@@ -287,7 +317,6 @@ async def _save_service(hass: HomeAssistant, call: ServiceCall):
                 await hub.save()
 
 
-@bind_hass
 async def _get_port(hass: HomeAssistant, call: ServiceCall):
     port = call.data.get('port')
     mega_id = call.data.get('mega_id')
@@ -300,6 +329,7 @@ async def _get_port(hass: HomeAssistant, call: ServiceCall):
         elif isinstance(port, list):
             for x in port:
                 await hub.get_port(x)
+        hub.updater.async_set_updated_data(hub.values)
     else:
         for hub in hass.data[DOMAIN][CONF_ALL].values():
             if not isinstance(hub, MegaD):
@@ -311,9 +341,9 @@ async def _get_port(hass: HomeAssistant, call: ServiceCall):
             elif isinstance(port, list):
                 for x in port:
                     await hub.get_port(x)
+            hub.updater.async_set_updated_data(hub.values)
 
 
-@bind_hass
 async def _run_cmd(hass: HomeAssistant, call: ServiceCall):
     mega_id = call.data.get('mega_id')
     cmd = call.data.get('cmd')
@@ -321,5 +351,5 @@ async def _run_cmd(hass: HomeAssistant, call: ServiceCall):
         hub: MegaD = hass.data[DOMAIN][mega_id]
         await hub.request(cmd=cmd)
     else:
-        for hub in hass.data[DOMAIN].values():
+        for hub in hass.data[DOMAIN][CONF_ALL].values():
             await hub.request(cmd=cmd)

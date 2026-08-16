@@ -1,9 +1,9 @@
 *sync-conflict*
 *.db
 *.log*
-*.yaml
+/configuration.yaml
+/secrets.yaml
 **/__pycache__
-test_*
 temp_*
 tr.py
 experiment_*

@@ -6,7 +6,7 @@ from datetime import timedelta
 from functools import partial
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_NAME
+from homeassistant.const import CONF_NAME, STATE_ON
 from homeassistant.core import State
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -95,7 +95,7 @@ class BaseMegaEntity(CoordinatorEntity, RestoreEntity):
         attr = getattr(self, f'_{name}', None)
         if attr is None and self._state is not None:
             if name == 'is_on':
-                attr = self._state.state
+                attr = self._state.state == STATE_ON
             else:
                 attr = self._state.attributes.get(f'{name}', default)
         return attr if attr is not None else default
@@ -340,8 +340,8 @@ class MegaOutPort(MegaPushEntity):
     def is_on(self) -> bool:
         val = self.mega.values.get(self.port, {})
         if isinstance(val, dict) and len(val) == 0 and self._state is not None:
-            return self._state == 'ON'
-        elif isinstance(self.port, str) and 'e' in self.port and val:
+            return self._state.state == STATE_ON
+        elif isinstance(self.port, str) and 'e' in self.port:
             if val is None:
                 return
             if self.dimmer:
@@ -453,23 +453,24 @@ class MegaOutPort(MegaPushEntity):
         brightness = brightness or self.brightness or 255
         brightness = self._calc_brightness(brightness)
         _prev = safe_int(self.brightness) or 0
+        _prev_hardware = min(
+            self._calc_brightness(_prev) * self.dimmer_scale,
+            self.max_dim,
+        )
         self._brightness = brightness
         if self.dimmer and brightness == 0:
             cmd = self.max_dim
         elif self.dimmer:
             cmd = min((brightness * self.dimmer_scale, self.max_dim))
             if self.smooth_dim or transition:
-                self._set_dim_brightness(from_=_prev, to_=cmd, transition=transition)
+                self._set_dim_brightness(
+                    from_=_prev_hardware,
+                    to_=cmd,
+                    transition=transition,
+                )
         else:
             cmd = 1 if not self.invert else 0
-        if transition is None:
-            _cmd = {"cmd": f"{self.cmd_port}:{cmd}"}
-        else:
-            _cmd = {
-                "pt": f"{self.cmd_port}",
-                "pwm": cmd,
-                "cnt": round(transition / (abs(_prev - brightness) / 255)),
-            }
+        _cmd = {"cmd": f"{self.cmd_port}:{cmd}"}
         if self.addr:
             _cmd['addr'] = self.addr
         if not (self.smooth_dim or transition):
@@ -501,13 +502,17 @@ class MegaOutPort(MegaPushEntity):
         cmd = "0" if not self.invert else "1"
         _cmd = {"cmd": f"{self.cmd_port}:{cmd}"}
         _prev = safe_int(self.brightness) or 0
+        _prev_hardware = min(
+            self._calc_brightness(_prev) * self.dimmer_scale,
+            self.max_dim,
+        )
         if self.addr:
             _cmd['addr'] = self.addr
         if not (self.smooth_dim or transition):
             await self.mega.request(**_cmd, priority=-1)
         else:
             self._set_dim_brightness(
-                from_=_prev,
+                from_=_prev_hardware,
                 to_=0,
                 transition=transition,
             )
@@ -526,6 +531,7 @@ class MegaOutPort(MegaPushEntity):
         await self.get_state()
 
     async def async_will_remove_from_hass(self) -> None:
+        await super().async_will_remove_from_hass()
         if self.task is not None:
             self.task.cancel()
 

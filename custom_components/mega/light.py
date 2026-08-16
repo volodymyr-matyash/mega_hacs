@@ -3,8 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import typing
-from datetime import timedelta, datetime
+from datetime import timedelta
 from functools import partial
 
 import voluptuous as vol
@@ -13,13 +12,9 @@ import time
 
 from homeassistant.components.light import (
     PLATFORM_SCHEMA as LIGHT_SCHEMA,
-    SUPPORT_BRIGHTNESS,
     LightEntity,
-    SUPPORT_TRANSITION,
-    SUPPORT_COLOR,
     ColorMode,
     LightEntityFeature,
-    # SUPPORT_WHITE_VALUE
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
@@ -124,9 +119,21 @@ async def async_setup_entry(
 class MegaLight(MegaOutPort, LightEntity):
     @property
     def supported_features(self):
-        return (SUPPORT_BRIGHTNESS if self.dimmer else 0) | (
-            SUPPORT_TRANSITION if self.dimmer else 0
-        )
+        if self.dimmer:
+            return LightEntityFeature.TRANSITION
+        return LightEntityFeature(0)
+
+    @property
+    def supported_color_modes(self) -> set[ColorMode]:
+        if self.dimmer:
+            return {ColorMode.BRIGHTNESS}
+        return {ColorMode.ONOFF}
+
+    @property
+    def color_mode(self) -> ColorMode:
+        if self.dimmer:
+            return ColorMode.BRIGHTNESS
+        return ColorMode.ONOFF
 
 
 class MegaRGBW(LightEntity, BaseMegaEntity):
@@ -137,7 +144,7 @@ class MegaRGBW(LightEntity, BaseMegaEntity):
         self._hs_color = None
         self._rgb_color: tuple[int, int, int] | None = None
         self._white_value = None
-        self._task: asyncio.Task = None
+        self._task: asyncio.Task | None = None
         self._restore = None
         self.smooth: timedelta = self.customize[CONF_SMOOTH]
         self._color_order = self.customize.get(CONF_ORDER, "rgb")
@@ -148,7 +155,7 @@ class MegaRGBW(LightEntity, BaseMegaEntity):
     def max_values(self) -> list:
         if self._max_values is None:
             if self.is_ws:
-                self._max_values = [255] * 4
+                self._max_values = [255] * 3
             else:
                 self._max_values = [
                     255 if isinstance(x, int) else 4095 for x in self.port
@@ -164,14 +171,11 @@ class MegaRGBW(LightEntity, BaseMegaEntity):
         return self.customize.get(CONF_WS28XX)
 
     @property
-    def supported_color_modes(self) -> set[ColorMode] | set[str] | None:
-        return {
-            ColorMode.BRIGHTNESS,
-            ColorMode.RGB if len(self.port) != 4 else ColorMode.RGBW,
-        }
+    def supported_color_modes(self) -> set[ColorMode]:
+        return {ColorMode.RGBW if len(self.port) == 4 else ColorMode.RGB}
 
     @property
-    def color_mode(self) -> ColorMode | str | None:
+    def color_mode(self) -> ColorMode:
         if len(self.port) == 4:
             return ColorMode.RGBW
         else:
@@ -179,25 +183,45 @@ class MegaRGBW(LightEntity, BaseMegaEntity):
 
     @property
     def white_value(self):
-        # if self.supported_features & SUPPORT_WHITE_VALUE:
-        return float(self.get_attribute("white_value", 0))
+        if len(self.port) != 4:
+            return None
+        value = self._white_value
+        if value is None and self._state is not None:
+            rgbw = self._state.attributes.get("rgbw_color")
+            if rgbw is not None:
+                value = rgbw[3]
+            else:
+                value = self._state.attributes.get("white_value")
+        return round(float(value or 0))
 
     @property
     def rgb_color(self) -> tuple[int, int, int] | None:
-        return self._rgb_color
+        value = self._rgb_color
+        if value is None and self._state is not None:
+            if len(self.port) == 4:
+                rgbw = self._state.attributes.get("rgbw_color")
+                if rgbw is not None:
+                    value = rgbw[:3]
+            if value is None:
+                value = self._state.attributes.get("rgb_color")
+        if value is None:
+            h, s = self.hs_color
+            value = colorsys.hsv_to_rgb(h / 360, s / 100, 1)
+            value = tuple(channel * 255 for channel in value)
+        return tuple(round(channel) for channel in value[:3])
 
     @property
     def rgbw_color(self) -> tuple[int, int, int, int] | None:
-        if self._white_value is not None and self._rgb_color is not None:
-            return (*self._rgb_color, self._white_value)
+        if len(self.port) == 4:
+            return (*self.rgb_color, self.white_value)
 
     @property
     def brightness(self):
-        return float(self.get_attribute("brightness", 0))
+        return round(float(self.get_attribute("brightness", 0)))
 
     @property
     def hs_color(self):
-        return self.get_attribute("hs_color", [0, 0])
+        return tuple(self.get_attribute("hs_color", (0, 0)))
 
     @property
     def is_on(self):
@@ -209,21 +233,27 @@ class MegaRGBW(LightEntity, BaseMegaEntity):
 
     def get_rgbw(self):
         if not self.is_on:
-            return [0 for x in range(len(self.port))] if not self.is_ws else [0] * 3
-        rgb = colorsys.hsv_to_rgb(
-            self.hs_color[0] / 360, self.hs_color[1] / 100, self.brightness / 255
-        )
-        rgb = [x for x in rgb]
-        if self.white_value is not None:
-            white = self.white_value
-            if not self.customize.get(CONF_WHITE_SEP):
-                white = white * (self.brightness / 255)
-            rgb.append(white / 255)
-        rgb = [round(x * self.max_values[i]) for i, x in enumerate(rgb)]
+            return [0] * (3 if self.is_ws else len(self.port))
+
+        color = list(self.rgb_color)
+        if len(self.port) == 4:
+            color.append(self.white_value)
+
+        brightness = self.brightness / 255
+        values = []
+        for i, component in enumerate(color):
+            component_scale = component / 255
+            if not (
+                i == 3
+                and self.customize.get(CONF_WHITE_SEP, True)
+            ):
+                component_scale *= brightness
+            values.append(round(component_scale * self.max_values[i]))
+
         if self.is_ws:
             # восстанавливаем мэпинг
-            rgb = map_reorder_rgb(rgb, RGB, self._color_order)
-        return rgb
+            values = map_reorder_rgb(values, RGB, self._color_order)
+        return values
 
     async def async_turn_on(self, **kwargs):
         if (time.time() - self._last_called) < 0.1:
@@ -245,9 +275,12 @@ class MegaRGBW(LightEntity, BaseMegaEntity):
             return
         self._last_called = time.time()
         self._restore = {
-            "hs_color": self.hs_color,
             "brightness": self.brightness,
-            "white_value": self.white_value,
+            (
+                "rgbw_color"
+                if len(self.port) == 4
+                else "rgb_color"
+            ): self.rgbw_color if len(self.port) == 4 else self.rgb_color,
         }
         _before = self.get_rgbw()
         self._is_on = False
@@ -258,13 +291,24 @@ class MegaRGBW(LightEntity, BaseMegaEntity):
     async def set_color(self, _before, **kwargs):
         transition = kwargs.get("transition")
         update_state = transition is not None and transition > 3
-        _after = None
         for item, value in kwargs.items():
-            setattr(self, f"_{item}", value)
             if item == "rgb_color":
-                _after = map_reorder_rgb(value, RGB, self._color_order)
-        _after = _after or self.get_rgbw()
-        self._rgb_color = map_reorder_rgb(tuple(_after[:3]), self._color_order, RGB)
+                self._set_rgb_color(value)
+            elif item == "rgbw_color":
+                self._set_rgb_color(value[:3])
+                self._white_value = value[3]
+            elif item == "hs_color":
+                self._hs_color = tuple(value)
+                rgb = colorsys.hsv_to_rgb(
+                    value[0] / 360,
+                    value[1] / 100,
+                    1,
+                )
+                self._rgb_color = tuple(round(x * 255) for x in rgb)
+            else:
+                setattr(self, f"_{item}", value)
+        _after = self.get_rgbw()
+        self._update_from_rgb(_after)
         if transition is None:
             transition = self.smooth.total_seconds()
             ratio = self.calc_speed_ratio(_before, _after)
@@ -288,6 +332,12 @@ class MegaRGBW(LightEntity, BaseMegaEntity):
         except:
             self.lg.exception("while dimming")
 
+    def _set_rgb_color(self, rgb):
+        rgb = tuple(round(x) for x in rgb)
+        self._rgb_color = rgb
+        h, s, _ = colorsys.rgb_to_hsv(*[x / 255 for x in rgb])
+        self._hs_color = (h * 360, s * 100)
+
     async def async_will_remove_from_hass(self) -> None:
         await super().async_will_remove_from_hass()
         if self._task is not None:
@@ -302,22 +352,47 @@ class MegaRGBW(LightEntity, BaseMegaEntity):
             rgb = rgbw
         if self.is_ws:
             rgb = map_reorder_rgb(rgb, self._color_order, RGB)
-        h, s, v = colorsys.rgb_to_hsv(
-            *[x / self.max_values[i] for i, x in enumerate(rgb)]
-        )
-        h *= 360
-        s *= 100
-        v *= 255
-        self._hs_color = [h, s]
-        if self.is_on:
-            self._brightness = v
+
+        if not self.is_on:
+            if update_state:
+                self.async_write_ha_state()
+            return
+
+        levels = [
+            channel / self.max_values[i] * 255
+            for i, channel in enumerate(rgb)
+        ]
         if w is not None:
-            if not self.customize.get(CONF_WHITE_SEP):
-                w = w / (self._brightness / 255)
+            white_level = w / self.max_values[-1] * 255
+        else:
+            white_level = None
+
+        if white_level is not None and self.customize.get(CONF_WHITE_SEP, True):
+            brightness = max(levels, default=0)
+            if brightness:
+                normalized_rgb = [x / brightness * 255 for x in levels]
             else:
-                w = w
-            w = w / (self.max_values[-1] / 255)
-            self._white_value = w
+                normalized_rgb = [0, 0, 0]
+                brightness = 255 if white_level else 0
+            normalized_white = white_level
+        else:
+            all_levels = levels + ([] if white_level is None else [white_level])
+            brightness = max(all_levels, default=0)
+            if brightness:
+                normalized = [x / brightness * 255 for x in all_levels]
+            else:
+                normalized = [0] * len(all_levels)
+            normalized_rgb = normalized[:3]
+            normalized_white = normalized[3] if white_level is not None else None
+
+        self._brightness = round(brightness)
+        self._rgb_color = tuple(round(x) for x in normalized_rgb)
+        h, s, _ = colorsys.rgb_to_hsv(
+            *[x / 255 for x in self._rgb_color]
+        )
+        self._hs_color = (h * 360, s * 100)
+        if normalized_white is not None:
+            self._white_value = round(normalized_white)
         # print(f'updated state {self.hs_color=} {self.brightness=}')
         if update_state:
             self.async_write_ha_state()

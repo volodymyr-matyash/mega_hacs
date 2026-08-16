@@ -12,6 +12,7 @@ HUM = 'hum'
 W1 = 'w1'
 W1BUS = 'w1bus'
 CONF_PORT_TO_SCAN = 'port_to_scan'
+CONF_SCAN_INTERVAL = 'scan_interval'
 CONF_RELOAD = 'reload'
 CONF_INVERT = 'invert'
 CONF_PORTS = 'ports'
@@ -52,6 +53,18 @@ CONF_FILTER_LOW = 'filter_low'
 CONF_FILTER_HIGH = 'filter_high'
 CONF_1WBUS = '1wbus'
 CONF_ADDR = 'addr'
+CONFIG_OPTION_KEYS = frozenset({
+    CONF_SCAN_INTERVAL,
+    CONF_POLL_OUTS,
+    CONF_NPORTS,
+    CONF_UPDATE_ALL,
+    CONF_FAKE_RESPONSE,
+    CONF_FORCE_D,
+    CONF_RESTORE_ON_RESTART,
+    CONF_PROTECTED,
+    CONF_ALLOW_HOSTS,
+    CONF_UPDATE_TIME,
+})
 PLATFORMS = [
     "light",
     "switch",
